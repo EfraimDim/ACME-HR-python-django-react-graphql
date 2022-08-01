@@ -1,0 +1,71 @@
+include:
+  - template: Code-Quality.gitlab-ci.yml
+
+stages:
+  - test
+  - sonar
+  - build
+
+services:
+  - docker:20.10.8-dind
+
+variables:
+  CONTAINER_TEST_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
+
+test:
+  stage: test
+  image: python:latest
+  cache:
+    key: $CI_RUNNER_EXECUTABLE_ARCH
+    paths:
+      - .cache/pip
+  services:
+    - name: diegmonti/test_db:latest
+      alias: db
+  variables:
+    DB_HOST: db
+    DB_PORT: 5432
+    DB_PASSWORD: 1234
+    POSTGRES_PASSWORD: 1234
+  script:
+    - cd AcmeHrApp
+    - python -m venv .venv
+    - source .venv/bin/activate
+    - pip install -r requirements.txt
+    - python manage.py test
+    - coverage run manage.py test
+    - coverage report
+    - coverage xml
+  artifacts:
+    when: always
+    paths:
+      - AcmeHrApp/coverage.xml
+    reports:
+      junit:
+        - AcmeHrApp/test-reports.xml
+      cobertura: AcmeHrApp/coverage.xml
+
+sonarcloud-check:
+  stage: sonar
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner
+  needs: ["test"]
+  dependencies:
+    - test
+
+build:
+  stage: build
+  image: docker:20.10.8
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build --pull -t $CONTAINER_TEST_IMAGE --build-arg DB_HOST=localhost --build-arg DB_PASSWORD=1234 --build-arg DB_PORT=5433 .
+    - docker push $CONTAINER_TEST_IMAGE
